@@ -9,7 +9,7 @@ import pandas as pd
 from scipy.integrate import ode
 from tqdm import tqdm
 from scipy.optimize import minimize, minimize_scalar
-import time
+import matplotlib.pyplot as plt
 
 
 class CowlingApproximation:
@@ -18,7 +18,9 @@ class CowlingApproximation:
         self.W0, self.U0, self.init_VEC, self.p_max, self.p_min, self.p_max = None, None, None, None, None, None
         self.p0, self.e0, self.p_c, self.e_c, self.m0, self.omega, self.l = None, None, None, None, None, None, None
         self.r_i, self.m, self.v, self.w, self.u, self.r_arr, self.e_arr = None, None, None, None, None, None, None
-        self.p_arr, self.m_R, self.r_R, self.f, self.res = None, None, None, None, None
+        self.p_arr, self.m_R, self.r_R, self.f, self.res, self.omega_arr = None, None, None, None, None, None
+        self.loss_arr = None
+        self.omega_vals, self.loss_vals = [], []
         self.n_iter_max = 20000
         self.const = initialize.Constants()
         self.data = initialize.DataManagement()
@@ -227,10 +229,13 @@ class CowlingApproximation:
         return None
 
     def _minimize_boundary(self, omega):
+        self.omega = omega
         p, m, r_arr, v, w, u = self.tov()
         max_idx, m_R, r_R, p_R, ec_R, u_R, v_R, w_R, \
         schild, interior = self._surface_conditions(p, m, r_arr, v, w, u)
         loss = np.log10(abs(self._boundary_wu(r_R, m_R, omega, w_R, u_R)))
+        self.loss_vals.append(loss)
+        self.omega_vals.append(omega)
         return loss
 
     def _save_mass_radius(self):
@@ -266,6 +271,15 @@ class CowlingApproximation:
         f = omg / (2 * np.pi)
         self.f = f
         self.res = res
+        self.omega_arr = np.array(self.omega_vals)
+        self.loss_arr = np.array(self.loss_vals)
+        return None
+
+    def plot_loss(self):
+        plt.figure()
+        plt.scatter(self.omega_arr / (2 * np.pi), self.loss_arr)
+        plt.title(f"fmode: {self.f}")
+        plt.show()
         return None
 
 
