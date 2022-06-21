@@ -2,7 +2,7 @@
 __author__ = "Utkarsh Mali"
 __copyright__ = "Canadian Institute of Theoretical Astrophysics"
 
-import initialize
+import cowling_approximation.initialize as initialize
 import numpy as np
 from scipy.interpolate import interp1d
 import pandas as pd
@@ -13,24 +13,47 @@ from scipy.optimize import minimize, minimize_scalar
 
 class CowlingApproximation:
     def __init__(self):
-        self.e, self.p = None, None
-        self.path = None
-        self.dedp = None
-        self.pbar = None
+        self.e, self.p, self.EOS, self.path, self.dedp, self.pbar, self.v0 = None, None, None, None, None, None, None
+        self.W0, self.U0, self.init_VEC, self.p_max, self.p_min, self.p_max = None, None, None, None, None, None
+        self.p0, self.e0, self.p_c, self.e_c, self.m0, self.omega, self.l = None, None, None, None, None, None, None
+        self.r_i, self.m, self.v, self.w, self.u, self.r_arr, self.e_arr = None, None, None, None, None, None, None
+        self.p_arr = None
         self.const = initialize.Constants()
         self.data = initialize.DataManagement()
 
-    def load_path(self, path):
-        self.path = path
+    def _get_ep(self, e, p):
+        f_e_smooth = interp1d(p, e, fill_value="extrapolate", kind="cubic")
+        return f_e_smooth
 
-    def load_e_p(self):
-        df = pd.read_csv(self.path)
-        self.e, self.p = self.data.df_to_ep(df)
+    def _get_pe(self, p, e):
+        f_e_smooth = interp1d(e, p, fill_value=(0, 0), kind="cubic", bounds_error=True)
+        return f_e_smooth
+
+    def read_data(self, path):
+        self.path = path
+        df = pd.read_csv(path)
+        e, p = self.data.df_to_ep(df)
+        EOS = self._get_ep(e, p)
+        self.e_arr = e
+        self.p_arr = p
+        self.EOS = EOS
+        return None
 
     def load_dedp(self):
-        self.dedp = self.dedP(self.p, self.e)
+        self.dedp = self._dedP(self.p_arr, self.e_arr)
 
-    def lamba_metric(self, M, R):
+    def _dedP_helper(self, p_arr, e_arr):
+        return np.gradient(e_arr, p_arr), e_arr
+
+    def _dedP(self, p_arr, e_arr):
+        dedp_helper, e_arr = self._dedP_helper(p_arr, e_arr)
+        return interp1d(e_arr, dedp_helper, fill_value="extrapolate", kind="cubic")
+
+    def _drhodP(self, e):
+        c = self.const.c
+        return (c ** -2) * self.dedp(e)
+
+    def _lamda_metric(self, M, R):
         G = self.const.G
         c = self.const.c
         return -np.log((1 - 2 * G * M / (c ** 2 * R)))
@@ -70,18 +93,7 @@ class CowlingApproximation:
     def _dUdlnr(self, r, W, U, lamda, l, v):
         return np.exp(lamda / 2 - v) * (W - l * (np.exp(v - lamda / 2)) * U)
 
-    def dedP_helper(self, p, e):
-        return np.gradient(e, p), e
-
-    def dedP(self, p, e):
-        dedp_helper, e_arr = self.dedP_helper(p, e)
-        return interp1d(e_arr, dedp_helper, fill_value="extrapolate", kind="cubic")
-
-    def drhodP(self, e):
-        c = self.const.c
-        return (c ** -2) * self.dedp(e)
-
-    def coupledTOV(self, r, VEC, init_params):
+    def _coupledTOV(self, r, VEC, init_params):
         P, M, v, W, U = VEC
         EOS, l, omega, p_min, p_max = init_params
         if P <= p_min:
@@ -90,10 +102,11 @@ class CowlingApproximation:
             return None
         if 2 * self._b(r, M) >= 1:
             return None
+
         lamda = np.log(1 / (1 - 2 * self._b(r, M)))
         Q = self._Q(r, P, M)
         e = EOS(P)
-        c_ad2_inv = self.drhodP(e)
+        c_ad2_inv = self._drhodP(e)
         dPdr = self._dPdr(r, P, M, e)
         dMdr = self._dMdr(r, e)
         dvdr = self._dvdr(r, Q, lamda)
@@ -104,11 +117,32 @@ class CowlingApproximation:
         ret = [dPdr, dMdr, dvdr, dWdr, dUdr]
         return ret
 
+    def initial_conditions(self, k):
+        self.load_dedp()
+        G = self.const.G
+        c = self.const.c
+        self.r_i = 1
+        self.p0 = self.p_arr[k]
+        self.e0 = self.EOS(self.p0)
+        self.p_c = self.p0 - 2 * np.pi * (G / (c ** 4)) * self.r_i ** 2 * (self.p0 + self.e0) * \
+                   (3 * self.p0 + self.e0) / 3
+        self.e_c = self.EOS(self.p_c)
+        self.m0 = self.e_c / (c ** 2) * 4 / 3 * np.pi * self.r_i ** 3
+        self.omega = 2 * (2 * np.pi)
+        self.l = 2
+        self.v0 = -1
+        self.W0 = 1
+        self.U0 = self.W0 / (self.l * np.exp(self.v0))
+        self.init_VEC = [self.p_c, self.m0, self.v0, self.W0, self.U0]
+        self.p_max = max(self.p_arr)
+        self.p_min = max(c ** 2, min(self.p_arr))
+        return self.const.km2cm, self.r_i, self.p0, self.e0, self.p_c, self.e_c, self.m0, self.omega, self.l, \
+               self.v0, self.W0, self.U0, self.init_VEC, self.p_min, self.p_max
+
     def tov(self, EOS, init_VEC, r_i, p_min, p_max, omega, progress=False,
             l=2, n_iter_max=20000):
         init_params = [EOS, l, omega, p_min, p_max]
-        #     r = ode(lambda r, VEC: self.coupledTOV(r, VEC, init_params)).set_integrator('LSODA')
-        r = ode(lambda r, VEC: self.coupledTOV(r, VEC, init_params)).set_integrator('VODE')
+        r = ode(lambda _r, VEC: self._coupledTOV(_r, VEC, init_params)).set_integrator('VODE')
         r.set_initial_value(init_VEC, r_i)
         results = []
         r_list = []
@@ -138,34 +172,28 @@ class CowlingApproximation:
         results = np.array(results, dtype=float)
         p, m, v, w, u = results.T
         r = np.array(r_list)
+        self.p, self.m, self.v, self.w, self.u, self.r_arr = p, m, v, w, u, r
         return p, m, r, v, w, u
 
-    def initial_conditions(self, EOS, e, p, k, km2cm=1e5, r_i=1):
-        G = self.const.G
-        c = self.const.c
-        p0 = p[k]
-        e0 = EOS(p0)
-        p_c = p0 - 2 * np.pi * (G / (c ** 4)) * r_i ** 2 * (p0 + e0) * (3 * p0 + e0) / 3
-        e_c = EOS(p_c)
-        m0 = e_c / (c ** 2) * 4 / 3 * np.pi * r_i ** 3
-        omega = 2 * (2 * np.pi)
-        l = 2
-        v0 = -1
-        W0 = 1
-        U0 = W0 / (l * np.exp(v0))
-        init_VEC = [p_c, m0, v0, W0, U0]
-        p_max = max(p)
-        p_min = max(c ** 2, min(p))
-        return km2cm, r_i, p0, e0, p_c, e_c, m0, omega, l, v0, W0, U0, init_VEC, p_min, p_max
+    def update_initial_conditions(self):
+        max_idx, m_R, r_R, p_R, ec_R, u_R, v_R, w_R, schild, \
+        interior = self._surface_conditions(self.p, self.m, self.r_arr, self.v, self.w, self.u)
+        v_ext = -self._lamda_metric(m_R, r_R)
+        v_int = v_R  # At surface
+        delta_v = v_int - v_ext
+        self.v0 = self.v0 - delta_v
+        self.U0 = self.W0 / (self.l * np.exp(self.v0))
+        self.init_VEC = [self.p_c, self.m0, self.v0, self.W0, self.U0]
+        return None
 
-    def surface_conditions(self, p, m, r_arr, v, w, u):
+    def _surface_conditions(self, p, m, r_arr, v, w, u):
         G = self.const.G
         c = self.const.c
         max_idx = np.argmax(m) - 1
         m_R = m.max()  # In units of msun
         r_R = r_arr[max_idx]  # In units of km
         p_R = p[max_idx]  # cgs
-        ec_R = EOS(p_R)  # cgs
+        ec_R = self.EOS(p_R)  # cgs
         u_R = u[max_idx]  # cgs
         v_R = v[max_idx]
         w_R = w[max_idx]
@@ -173,34 +201,32 @@ class CowlingApproximation:
         interior = np.exp(v_R)
         return max_idx, m_R, r_R, p_R, ec_R, u_R, v_R, w_R, schild, interior
 
-    def boundary_wu(self, r_R, m_R, omega, w_R, u_R):
+    def _boundary_wu(self, r_R, m_R, omega, w_R, u_R):
         G = self.const.G
         c = self.const.c
         frac1 = (omega ** 2 * r_R ** 3) / (G * m_R)
         return frac1 * np.sqrt(1 - (2 * G * m_R) / (r_R * (c ** 2))) - w_R / u_R
 
     def print_params(self, p, m, r_arr, v, w, u):
-        max_idx, m_R, r_R, p_R, ec_R, u_R, v_R, w_R, \
-        schild, interior = self.surface_conditions(p, m, r_arr, v, w, u)
+        max_idx, m_R, r_R, p_R, ec_R, u_R, v_R, w_R, schild, interior = self._surface_conditions(p, m, r_arr, v, w, u)
         print(f"Star has mass {m_R / self.const.msun:.3f} Msun and radius {r_R / self.const.km2cm:.3f}km")
         print(f"Interior Surface: {interior:.8f}")
         print(f"Exterior Surface: {schild:.8f}")
-        print(f"v0: {v0}")
-        print(f"Lamda: {self.lamba_metric(m_R, r_R)}")
-        print(f"Boundary Term: {self.boundary_wu(r_R, m_R, omega, w_R, u_R)}")
+        print(f"v0: {self.v0}")
+        print(f"Lamda: {self._lamda_metric(m_R, r_R)}")
+        print(f"Boundary Term: {self._boundary_wu(r_R, m_R, self.omega, w_R, u_R)}")
         return None
 
-    def minimize_boundary(self, params, p=p, EOS=EOS):
-        # Repeat integration
+    def _minimize_boundary(self, params):
         omega = params
 
         # Integrate
-        p, m, r_arr, v, w, u = self.tov(EOS, init_VEC, r_i, p_min, p_max, omega, l=l)
+        p, m, r_arr, v, w, u = self.tov(self.EOS, self.init_VEC, self.r_i, self.p_min, self.p_max, omega, l=self.l)
 
         max_idx, m_R, r_R, p_R, ec_R, u_R, v_R, w_R, \
-        schild, interior = self.surface_conditions(p, m, r_arr, v, w, u)
+        schild, interior = self._surface_conditions(p, m, r_arr, v, w, u)
 
-        loss = np.log10(abs(self.boundary_wu(r_R, m_R, omega, w_R, u_R)))
+        loss = np.log10(abs(self._boundary_wu(r_R, m_R, omega, w_R, u_R)))
         return loss
 
     def get_omega_bounds(self, mass_arr, radius_arr):

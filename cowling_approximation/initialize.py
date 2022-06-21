@@ -20,7 +20,7 @@ class Constants:
 
 class DataManagement:
     def __init__(self):
-        self.const = initialize.Constants()
+        self.const = Constants()
 
     def df_to_ep(self, df):
         c = self.const.c
@@ -30,17 +30,3 @@ class DataManagement:
         e_den_normed = e_den_normed * (c ** 2)
         pressure = p * (c ** 2)
         return e_den_normed.to_numpy(), pressure.to_numpy()
-
-    def get_ep(self, e, p):
-        f_e_smooth = interp1d(p, e, fill_value="extrapolate", kind="cubic")
-        return f_e_smooth
-
-    def get_pe(self, p, e):
-        f_e_smooth = interp1d(e, p, fill_value=(0, 0), kind="cubic", bounds_error=True)
-        return f_e_smooth
-
-    def read_data(self, path):
-        df = pd.read_csv(path)
-        e, p = self.df_to_ep(df)
-        EOS = self.get_ep(e, p)
-        return e, p, EOS
