@@ -282,6 +282,39 @@ class CowlingApproximation:
         plt.show()
         return None
 
+    def plot_pmnuWV(self):
+        r_arr = self.r_arr / self.const.km2cm
+        p, m, v, u, w, p_c, = self.p, self.m, self.v, self.u, self.w, self.p_c
+        plt.figure()
+        plt.plot(r_arr, p / p_c)
+        plt.xlabel("r")
+        plt.ylabel("P/Pc")
+
+        plt.figure()
+        plt.plot(r_arr, m / self.const.msun)
+        plt.xlabel("r ")
+        plt.ylabel("M/Msun")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr, v)
+        plt.xlabel("r ")
+        plt.ylabel("v")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr, w)
+        plt.xlabel("r ")
+        plt.ylabel("W")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr, -u * np.exp(v))
+        plt.xlabel("r ")
+        plt.ylabel("V")
+        plt.show()
+        return None
+
 
 if __name__ == "__main__":
     test = CowlingApproximation()
