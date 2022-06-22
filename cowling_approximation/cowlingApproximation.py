@@ -459,7 +459,7 @@ class CowlingApproximation:
         upper = 2 * np.pi * (0.8e3 + 50e-6 * np.sqrt(mass_arr / (radius_arr ** 3)))
         return lower, upper
 
-    def optimize_fmode(self, newt_approx=True):
+    def optimize_fmode(self, newt_approx=False):
         """
         Run fmode optimizer to determine the fundamental oscillation mode. Non-newtonian optimizer does not use
         oscillation bounds but is more prone to failing.
@@ -532,15 +532,17 @@ class CowlingApproximation:
         plt.show()
 
         plt.figure()
-        plt.plot(r_arr, w)
+        plt.plot(r_arr, abs(w))
         plt.xlabel("r ")
         plt.ylabel("W")
+        plt.yscale("log")
         plt.show()
 
         plt.figure()
-        plt.plot(r_arr, -u * np.exp(v))
+        plt.plot(r_arr, abs(-u * np.exp(v)))
         plt.xlabel("r ")
         plt.ylabel("V")
+        plt.yscale("log")
         plt.show()
         return None
 

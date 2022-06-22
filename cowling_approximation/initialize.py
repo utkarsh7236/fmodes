@@ -25,6 +25,12 @@ class DataManagement:
     def __init__(self):
         self.const = Constants()
 
+    @staticmethod
+    def trim_ep(e_arr, p_arr):
+        p = p_arr[p_arr > 1e8]
+        e = e_arr[p_arr > 1e8]
+        return e, p
+
     def df_to_ep(self, df):
         """
         Converts df to readable pressure and energy density in CGS units.
@@ -32,9 +38,9 @@ class DataManagement:
         :return: pressure and energy density in CGS units
         """
         c = self.const.c
-        e_den = df.energy_densityc2
-        e_den_normed = e_den
-        p = df.pressurec2
-        e_den_normed = e_den_normed * (c ** 2)
+        _e_den = df.energy_densityc2
+        _p = df.pressurec2
+        e_den, p = self.trim_ep(_e_den, _p)
+        e_den_normed = e_den * (c ** 2)
         pressure = p * (c ** 2)
         return e_den_normed.to_numpy(), pressure.to_numpy()
