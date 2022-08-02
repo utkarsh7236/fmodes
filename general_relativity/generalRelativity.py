@@ -6,9 +6,9 @@ import general_relativity.initialize as initialize
 import numpy as np
 from scipy.interpolate import interp1d
 import pandas as pd
-from scipy.integrate import ode
+from scipy.integrate import complex_ode
 from tqdm import tqdm
-from scipy.optimize import minimize, minimize_scalar
+from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 
 
@@ -28,8 +28,10 @@ class GeneralRelativity:
         self.p0, self.e0, self.p_c, self.e_c, self.m0, self.omega, self.l = None, None, None, None, None, None, None
         self.r_i, self.m, self.v, self.w, self.u, self.r_arr, self.e_arr = None, None, None, None, None, None, None
         self.p_arr, self.m_R, self.r_R, self.f, self.res, self.omega_arr = None, None, None, None, None, None
-        self.loss_arr = None
-        self.omega_vals, self.loss_vals = [], []
+        self.loss_arr, self.nu0, self.nl, self.X0, self.H00, self.H10 = None, None, None, None, None, None
+        self.b0, self.K0, self.Q0, self.r, self.nu, self.h1, self.k = None, None, None, None, None, None, None
+        self.x = None
+        self.omega_vals, self.loss_vals, self.K0_vals = [], [], []
 
         # Maximum number of integrations
         self.n_iter_max = 20000
@@ -336,29 +338,236 @@ class GeneralRelativity:
         term2 = term2_fac * (term2_1 + term2_2 + term2_3 + term2_4 + term2_5)
         return (1 / r) * (term1 + term2)
 
-    def derivative_term(self):
-        pass
+    def derivative_term(self, r, dMdr, dPdr, m, P):
+        """ Manually taken the implicit derivative taken from arXiv 2205.02081 EQ14.
+        :param r: Radius at given point.
+        :param dMdr: Change is mass at given radius.
+        :param dPdr: Change in pressure at given radius.
+        :param m: Mass at given radius.
+        :param P: Pressure at given radius.
+        :return:
+        """
+        G = self.const.G
+        c = self.const.c
+        pi = np.pi
+        exp = np.exp
+        sqrt = np.sqrt
+        return G * (G * (dMdr * r - m) * (4 * pi * P * r ** 3 + c ** 2 * m) - 6 * (-2 * G * m + c ** 2 * r) * (
+                4 * pi * P * r ** 3 + c ** 2 * m) + 2 * (-2 * G * m + c ** 2 * r) * (
+                            c ** 2 * dMdr * r - c ** 2 * m + 4 * pi * r ** 3 * (2 * P + dPdr * r))) / (
+                       2 * c ** 6 * r ** 6 * ((-2 * G * m + c ** 2 * r) / (c ** 2 * r)) ** (5 / 4))
 
-    def _coupledTOV(self):
-        pass
+    def _coupledTOV(self, r, VEC, init_params):
+        P, M, nu, H1, K, W, X = VEC
+        EOS, l, omega, p_min, p_max, nl = init_params
 
-    def initial_conditions(self):
-        pass
+        if P <= p_min:
+            return None
+        if P >= p_max:
+            return None
+        if 2 * self._b(r, M) >= 1:
+            return None
 
-    def tov(self):
-        pass
+        b = self._b(r, M)
+        lamda = np.log(1 / (1 - 2 * b))
+        Q = self._Q(r, P, M)
+        e = EOS(np.real(P))
+        cad2_inv = self._drhodP(e)
+
+        dPdr = self._dPdr(r, P, M, e)
+        dMdr = self._dMdr(r, e)
+
+        derv_term = self.derivative_term(r, dMdr, dPdr, M, P)
+
+        dnudr = self._dnudr(r, Q, lamda)
+        H0 = self._H0(r, nu, X, nl, Q, omega, lamda, H1, b, K)
+        V = self._V(r, X, e, P, Q, nu, lamda, W, H0, omega)
+
+        # arXiv 2205.02081
+        dH1dr = self._dH1dr(r, l, b, lamda, P, e, H1, H0, K, V)
+        dKdr = self._dKdr(r, H0, nl, H1, lamda, Q, l, K, e, P, W)
+        dWdr = self._dWdR(r, W, l, lamda, V, e, P, X, cad2_inv, H0, K, nu)
+        dXdr = self._dXdr(r, l, X, e, P, nu, lamda, Q, H0, omega, nl, H1, K, V, W, derv_term)
+
+        ret = [dPdr, dMdr, dnudr, dH1dr, dKdr, dWdr, dXdr]
+        return ret
+
+    def initial_conditions_helper(self, K0, e_c, p_c, nu0, omega, W0, nl, l, p0, e0):
+        G = self.const.G
+        c = self.const.c
+        e_c = e0
+        p_c = p0
+        X0_factor = (e_c + p_c) * np.exp(nu0 / 2)
+        X0_term1 = 4 * np.pi / 3 * (e_c + 3 * p_c) * W0 * G / (c ** 4)
+        X0_term2 = -(omega ** 2) / l * np.exp(-nu0) * W0 / (c ** 2)
+        X0_term3 = K0 / 2
+        X0 = X0_factor * (X0_term1 + X0_term2 + X0_term3)
+        H00 = K0
+        H10 = (l * K0 + 8 * np.pi * (G / (c ** 4)) * (e_c + p_c) * W0) / ((nl + 1))
+        return X0, H00, H10
+
+    def initial_conditions(self, k):
+        self.load_dedp()
+        G = self.const.G
+        c = self.const.c
+        self.r_i = 1  # Initial Radius
+        self.p0 = self.p_arr[k]  # Initial pressure
+        self.e0 = self.EOS(self.p0)  # Initial energy density
+
+        # Define central pressure and energy density.
+        self.p_c = self.p0 - 2 * np.pi * (G / (c ** 4)) * self.r_i ** 2 * (self.p0 + self.e0) * \
+                   (3 * self.p0 + self.e0) / 3
+        self.e_c = self.EOS(self.p_c)
+
+        self.m0 = self.e_c / (c ** 2) * 4 / 3 * np.pi * self.r_i ** 3  # Central mass density
+        self.omega = 2 * (2 * np.pi)  # Initial fmode frquency times 2pi
+
+        self.l = 2  # Spherical oscillation modes
+        self.nu0 = -1  # Initial metric condition
+        self.W0 = 1  # Initial Cowling Term 1
+        self.nl = (self.l - 1) * (self.l + 2) / 2
+        self.Q0 = self._Q(self.r_i, self.p_c, self.m0)
+        self.b0 = self._b(self.r_i, self.m0)
+        self.W0 = 1
+        self.K0 = -(self.e_c + self.p_c) * (G / (c ** 4))
+
+        self.X0, self.H00, self.H10 = self.initial_conditions_helper(self.K0, self.e_c, self.p_c, self.nu0, self.omega,
+                                                                     self.W0, self.nl, self.l, self.p0, self.e0)
+        self.init_VEC = [self.p_c, self.m0, self.nu0, self.H10, self.K0, self.W0, self.X0]
+        self.p_max = max(self.p_arr)  # Set maximum pressure to be largest value in table
+        self.p_min = max(c ** 2, min(self.p_arr))  # Set minimum pressure to be either c^2 or minimum value in table.
+        return self.p_c, self.e_c, self.m0, self.omega, self.l, self.nl, self.nu0, self.Q0, self.b0, self.W0, self.K0, \
+               self.X0, self.H00, self.H10, self.init_VEC, self.p_max, self.p_min, self.r_i, self.p0, self.e0
+
+    def tov(self, progress=False):
+        init_params = [self.EOS, self.l, self.omega, self.p_min, self.p_max, self.nl]
+        r = complex_ode(lambda _r, VEC: self._coupledTOV(_r, VEC, init_params)).set_integrator('VODE')
+        r.set_initial_value(self.init_VEC, self.r_i)
+        results = [self.init_VEC]
+        r_list = [self.r_i]
+        i = 0
+        r_max = 20 * self.const.km2cm
+        max_iter = self.n_iter_max
+        dr = r_max / max_iter
+        m_max = 0
+        if progress:
+            self.pbar = tqdm(total=max_iter)
+        while r.successful() and (np.real(r.y[0]) >= self.p_min):
+            i += 1
+            integral = r.integrate(r.t + dr)
+            if progress:
+                self.pbar.update(1)
+            if i > max_iter:
+                print("[STATUS] max_iter reached")
+                break
+            if np.real(r.y[0]) < self.p_min:
+                break
+            if not r.successful():
+                break
+            results.append(integral)
+            r_list.append(r.t + dr)
+
+            if r.y[1] < m_max:
+                break
+
+            m_max = max(r.y[1], m_max)
+
+        if progress:
+            self.pbar.close()
+
+        results = np.array(results, dtype=complex)
+        p, m, nu, h1, k, w, x = results.T
+        r = np.array(r_list, dtype=float)
+        self.p, self.m, self.r, self.nu, self.h1, self.k, self.w, self.x = p, m, r, nu, h1, k, w, x
+        return p, m, r, nu, h1, k, w, x
 
     def update_initial_conditions(self):
-        pass
+        """
+        Update initial conditions after first integration to match metrics post integration.
+        :return: None
+        """
+        max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, interior \
+            = self._surface_conditions(self.p, self.m, self.r_arr, self.nu, self.h1, self.k, self.w, self.x)
 
-    def _surface_conditions(self):
-        pass
+        # Computer external and internal metric, the difference is the change in metric for subsequent integrations.
+        nu_ext = -self._lamda_metric(m_R, r_R)
+        nu_int = nu_R  # At surface
+        delta_nu = nu_int - nu_ext
+        self.nu0 = self.nu0 - delta_nu
+        self.X0, self.H00, self.H10 = self.initial_conditions_helper(self.K0, self.e_c, self.p_c, self.nu0, self.omega,
+                                                                     self.W0, self.nl, self.l, self.p0, self.e0)
+        self.init_VEC = [self.p_c, self.m0, self.nu0, self.H10, self.K0, self.W0, self.X0]
+        return None
 
-    def print_params(self):
-        pass
+    def _surface_conditions(self, p, m, r_arr, nu, h1, k, w, x):
+        G = self.const.G
+        c = self.const.c
+        max_idx = np.argmax(m) - 1
+        m_R = m.max()  # In units of msun
+        r_R = r_arr[max_idx]  # In units of km
+        p_R = p[max_idx]  # cgs
+        ec_R = self.EOS(np.real(p_R))  # cgs
+        nu_R = nu[max_idx]
+        h1_R = h1[max_idx]
+        k_R = k[max_idx]
+        w_R = w[max_idx]
+        x_R = x[max_idx]
+        schild = (1 - 2 * G * m_R / (c ** 2 * r_R))
+        interior = np.exp(nu_R)
+        return max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, interior
+
+    def print_params(self, p, m, r_arr, nu, h1, k, w, x):
+        max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
+        interior = self._surface_conditions(p, m, r_arr, nu, h1, k, w, x)
+        print(f"Star has mass {m_R/self.const.msun:.3f} Msun and radius {r_R/self.const.km2cm:.3f}km")
+        print(f"Interior Surface: {interior:.8f}")
+        print(f"Exterior Surface: {schild:.8f}")
+        print(f"v0: {self.nu0}")
+        print(f"Lamda: {self._lamda_metric(m_R, r_R)}")
+        print(f"Boundary Term: {x_R}")
+        return None
+
+    def optimize_x_R(self, K0):
+        # Update Initial Conditions in terms of K0
+        self.X0, self.H00, self.H10 = self.initial_conditions_helper(self.K0, self.e_c, self.p_c, self.nu0, self.omega, self.W0,
+                                                      self.nl, self.l, self.p0, self.e0)
+        self.init_VEC = np.array([self.p_c, self.m0, self.nu0, self.H10, self.K0, self.W0, self.X0],
+                            dtype=complex).flatten()
+        p, m, r_arr, nu, h1, k, w, x = self.tov()
+        max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
+        interior = self._surface_conditions(p, m, r_arr, nu, h1, k, w, x)
+        loss = np.log10(abs(x_R))  # Absolute loss of complex B.C.
+        self.loss_vals.append(loss)
+        self.K0_vals.append(K0)
+        return loss
 
     def minimize_K0(self):
-        pass
+        self.n_iter_max = 10000
+        G = self.const.G
+        c = self.const.c
+        K0_guess = self.K0
+        init_guess = [K0_guess]
+
+        res = minimize(self.optimize_x_R, x0=init_guess, method='Nelder-Mead',
+                       options={"disp": True, "xatol": 1e-3, "fatol": 1e-3})
+
+        K0 = res.x[0]
+        X0_factor = (self.e_c + self.p_c) * np.exp(self.nu0 / 2)
+        X0_term1 = 4 * np.pi / 3 * (self.e_c + 3 * self.p_c) * self.W0 * G / (c ** 4)
+        X0_term2 = -(self.omega ** 2) / self.l * np.exp(-self.nu0) * self.W0 / (c ** 2)
+        X0_term3 = K0 / 2
+        self.X0 = X0_factor * (X0_term1 + X0_term2 + X0_term3)
+        self.H00 = K0
+        self.H10 = (self.l * K0 + 8 * np.pi * (G / (c ** 4)) * (self.e_c + self.p_c) * self.W0) / (self.nl + 1)
+        self.n_iter_max = 20000
+        return None
+
+    def plot_loss(self):
+        plt.figure()
+        plt.scatter(self.K0, self.loss_arr)
+        plt.title(f"K0 Minimized: {self.K0}")
+        plt.show()
+        return None
 
     def _save_mass_radius(self):
         pass
