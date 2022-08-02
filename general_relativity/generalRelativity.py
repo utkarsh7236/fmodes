@@ -30,7 +30,8 @@ class GeneralRelativity:
         self.p_arr, self.m_R, self.r_R, self.f, self.res, self.omega_arr = None, None, None, None, None, None
         self.loss_arr, self.nu0, self.nl, self.X0, self.H00, self.H10 = None, None, None, None, None, None
         self.b0, self.K0, self.Q0, self.r, self.nu, self.h1, self.k = None, None, None, None, None, None, None
-        self.x = None
+        self.x, self.z0, self.z, self.dzdr = None, None, None, None
+        self.hw1, self.hw2, self.hw3 = [300, 100, 30]
         self.omega_vals, self.loss_vals, self.K0_vals = [], [], []
 
         # Maximum number of integrations
@@ -519,7 +520,7 @@ class GeneralRelativity:
     def print_params(self, p, m, r_arr, nu, h1, k, w, x):
         max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
         interior = self._surface_conditions(p, m, r_arr, nu, h1, k, w, x)
-        print(f"Star has mass {m_R/self.const.msun:.3f} Msun and radius {r_R/self.const.km2cm:.3f}km")
+        print(f"Star has mass {m_R / self.const.msun:.3f} Msun and radius {r_R / self.const.km2cm:.3f}km")
         print(f"Interior Surface: {interior:.8f}")
         print(f"Exterior Surface: {schild:.8f}")
         print(f"v0: {self.nu0}")
@@ -529,10 +530,11 @@ class GeneralRelativity:
 
     def optimize_x_R(self, K0):
         # Update Initial Conditions in terms of K0
-        self.X0, self.H00, self.H10 = self.initial_conditions_helper(self.K0, self.e_c, self.p_c, self.nu0, self.omega, self.W0,
-                                                      self.nl, self.l, self.p0, self.e0)
+        self.X0, self.H00, self.H10 = self.initial_conditions_helper(self.K0, self.e_c, self.p_c, self.nu0, self.omega,
+                                                                     self.W0,
+                                                                     self.nl, self.l, self.p0, self.e0)
         self.init_VEC = np.array([self.p_c, self.m0, self.nu0, self.H10, self.K0, self.W0, self.X0],
-                            dtype=complex).flatten()
+                                 dtype=complex).flatten()
         p, m, r_arr, nu, h1, k, w, x = self.tov()
         max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
         interior = self._surface_conditions(p, m, r_arr, nu, h1, k, w, x)
@@ -570,13 +572,142 @@ class GeneralRelativity:
         return None
 
     def _save_mass_radius(self):
-        pass
-
-    def optimize_fmode(self):
-        pass
+        max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
+        interior = self._surface_conditions(self.p, self.m, self.r_arr, self.nu, self.h1, self.k, self.w, self.x)
+        self.m_R = m_R
+        self.r_R = r_R
+        return None
 
     def plot_fluid_perturbations(self):
-        pass
+        r_arr = self.r_arr
+        km2cm = self.const.km2cm
+        lims = 1
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, np.real(self.p[lims:]) / self.p_c)
+        plt.xlabel("r")
+        plt.ylabel("P/Pc")
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, np.real(self.m[lims:]) / self.const.msun)
+        plt.xlabel("r ")
+        plt.ylabel("M/Msun")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, np.real(self.nu[lims:]))
+        plt.xlabel("r ")
+        plt.ylabel("v")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, np.real(self.h1[lims:]))
+        plt.xlabel("r ")
+        plt.ylabel("H1")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, -np.real(self.k[lims:]))
+        plt.xlabel("r ")
+        plt.ylabel("-K")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, np.real(self.w[lims:]))
+        plt.xlabel("r ")
+        plt.ylabel("W")
+        plt.show()
+
+        plt.figure()
+        plt.plot(r_arr[lims:] / km2cm, np.real(self.x[lims:]))
+        plt.xlabel("r ")
+        plt.ylabel("X")
+        plt.show()
+        return None
+
+    # def zerilli_alt(self, r_star, u, omega):
+    #     z, dZdr_star = u
+    #     d2Zdr2_star = z * (self.V_z_alt(r_star, self.m_R, self.nl) - omega * np.conj(omega) / (self.const.c ** 2))
+    #     ret = [dZdr_star, d2Zdr2_star]
+    #     return ret
+    #
+    # def alphas(self, omega, m_R):
+    #     n = self.nl
+    #     G = self.const.G
+    #     c = self.const.c
+    #     alpha0 = 1 + 1j
+    #     alpha1 = -1j * (n + 1) * alpha0 * c / omega
+    #     alpha2 = alpha0 * (c ** 2) * (-n * (n + 1) + 1j * m_R * omega * (G / (c ** 3)) * (3 / 2 + 3 / n)) / (
+    #                 2 * omega ** 2)
+    #     return alpha0, alpha1, alpha2
+    #
+    # def V_z_alt(self, r, m_R, nl):
+    #     b = self._b(r, m_R)
+    #     n = self, nl
+    #     fac = (1 - 2 * b)
+    #     num = 2 * (n ** 2) * (n + 1) + 6 * (n ** 2) * b + 18 * n * (b ** 2) + 18 * (b ** 3)
+    #     dem = (r ** 2) * (n + 3 * b) ** 2
+    #     return fac * num / dem
+    #
+    # def r_star_func(self, r, m_R):
+    #     G = self.const.G
+    #     c = self.const.c
+    #     return r + 2 * (G / (c ** 2)) * m_R * np.log(abs((r * (c ** 2)) / (2 * G * m_R) - 1))
+    #
+    # def V_z(self, r, m_R):
+    #     nl = self.nl
+    #     G = self.const.G
+    #     c = self.const.c
+    #     G_c2 = G / (c ** 2)
+    #     num = (1 - 2 * G_c2 * m_R / r)
+    #     dem = (r ** 3) * ((nl * r + 3 * G_c2 * m_R) ** 2)
+    #     fac1 = 2 * nl ** 2 * (nl + 1) * (r ** 3)
+    #     fac2 = 6 * (G_c2 ** 1) * (nl ** 2) * m_R * (r ** 2)
+    #     fac3 = 18 * (G_c2 ** 2) * nl * (m_R ** 2) * r
+    #     fac4 = 18 * (G_c2 ** 3) * (m_R ** 3)
+    #     fac = fac1 + fac2 + fac3 + fac4
+    #     ret = fac * num / dem
+    #     return ret
+    #
+    # def zerilli(self, r_star, u, omega):
+    #     omega2 = pow(omega, 2)
+    #     z, dZdr_star = u
+    #     d2Zdr2_star = z * (self.V_z(r_star, self.m_R) - omega2 / (self.const.c ** 2))
+    #     ret = [dZdr_star, d2Zdr2_star]  # dZ/dr*, d2Z/dr*2
+    #     return ret
+    #
+    # def zrly(self, omega, r_star_vals, progress=True):
+    #     r = complex_ode(lambda r, VEC: self.zerilli(r, VEC, omega)).set_integrator('LSODA', atol=1.49012e-8,
+    #                                                                                rtol=1.49012e-8)
+    #     r.set_initial_value(self.z0, self.r_star_func(self.r_R, np.real(self.m_R)))
+    #     results = [self.z0]
+    #     r_list = [self.r_star_func(self.r_R, self.m_R)]
+    #     i = 0
+    #     if progress:
+    #         self.pbar = tqdm(total=len(r_star_vals))
+    #     while r.successful():
+    #         i += 1
+    #         if i >= len(r_star_vals):
+    #             break
+    #         if progress:
+    #             self.pbar.update(1)
+    #
+    #         integral = r.integrate(r_star_vals[i])
+    #         if not r.successful():
+    #             break
+    #         results.append(integral)
+    #         r_list.append(r_star_vals[i])
+    #     results = np.array(results, dtype=complex)
+    #     z, dzdr = results.T
+    #     r = np.array(r_list)
+    #     self.z, self.dzdr, self.r = z, dzdr, r
+    #     return z, dzdr, r
+    #
+    # def optimize_fmode(self):
+    #     pass
+    #
+    # def plot_loss_fmode(self):
+    #     pass
 
 
 if __name__ == "__main__":
