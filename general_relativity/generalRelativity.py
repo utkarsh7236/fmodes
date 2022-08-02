@@ -30,7 +30,7 @@ class GeneralRelativity:
         self.p_arr, self.m_R, self.r_R, self.f, self.res, self.omega_arr = None, None, None, None, None, None
         self.loss_arr, self.nu0, self.nl, self.X0, self.H00, self.H10 = None, None, None, None, None, None
         self.b0, self.K0, self.Q0, self.r, self.nu, self.h1, self.k = None, None, None, None, None, None, None
-        self.x, self.z0, self.z, self.dzdr = None, None, None, None
+        self.x, self.z0, self.z, self.dzdr, self.K0_arr = None, None, None, None, None
         self.hw1, self.hw2, self.hw3 = [300, 100, 30]
         self.omega_vals, self.loss_vals, self.K0_vals = [], [], []
 
@@ -404,7 +404,7 @@ class GeneralRelativity:
         X0_term3 = K0 / 2
         X0 = X0_factor * (X0_term1 + X0_term2 + X0_term3)
         H00 = K0
-        H10 = (l * K0 + 8 * np.pi * (G / (c ** 4)) * (e_c + p_c) * W0) / ((nl + 1))
+        H10 = (l * K0 + 8 * np.pi * (G / (c ** 4)) * (e_c + p_c) * W0) / (nl + 1)
         return X0, H00, H10
 
     def initial_conditions(self, k):
@@ -421,7 +421,7 @@ class GeneralRelativity:
         self.e_c = self.EOS(self.p_c)
 
         self.m0 = self.e_c / (c ** 2) * 4 / 3 * np.pi * self.r_i ** 3  # Central mass density
-        self.omega = 2 * (2 * np.pi)  # Initial fmode frquency times 2pi
+        self.omega = 2e3 * (2 * np.pi) + 0.1j # Initial fmode frquency times 2pi
 
         self.l = 2  # Spherical oscillation modes
         self.nu0 = -1  # Initial metric condition
@@ -479,7 +479,7 @@ class GeneralRelativity:
         results = np.array(results, dtype=complex)
         p, m, nu, h1, k, w, x = results.T
         r = np.array(r_list, dtype=float)
-        self.p, self.m, self.r, self.nu, self.h1, self.k, self.w, self.x = p, m, r, nu, h1, k, w, x
+        self.p, self.m, self.r_arr, self.nu, self.h1, self.k, self.w, self.x = p, m, r, nu, h1, k, w, x
         return p, m, r, nu, h1, k, w, x
 
     def update_initial_conditions(self):
@@ -517,9 +517,9 @@ class GeneralRelativity:
         interior = np.exp(nu_R)
         return max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, interior
 
-    def print_params(self, p, m, r_arr, nu, h1, k, w, x):
+    def print_params(self):
         max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
-        interior = self._surface_conditions(p, m, r_arr, nu, h1, k, w, x)
+        interior = self._surface_conditions(self.p, self.m, self.r_arr, self.nu, self.h1, self.k, self.w, self.x)
         print(f"Star has mass {m_R / self.const.msun:.3f} Msun and radius {r_R / self.const.km2cm:.3f}km")
         print(f"Interior Surface: {interior:.8f}")
         print(f"Exterior Surface: {schild:.8f}")
@@ -530,10 +530,10 @@ class GeneralRelativity:
 
     def optimize_x_R(self, K0):
         # Update Initial Conditions in terms of K0
-        self.X0, self.H00, self.H10 = self.initial_conditions_helper(self.K0, self.e_c, self.p_c, self.nu0, self.omega,
+        self.X0, self.H00, self.H10 = self.initial_conditions_helper(K0, self.e_c, self.p_c, self.nu0, self.omega,
                                                                      self.W0,
                                                                      self.nl, self.l, self.p0, self.e0)
-        self.init_VEC = np.array([self.p_c, self.m0, self.nu0, self.H10, self.K0, self.W0, self.X0],
+        self.init_VEC = np.array([self.p_c, self.m0, self.nu0, self.H10, K0, self.W0, self.X0],
                                  dtype=complex).flatten()
         p, m, r_arr, nu, h1, k, w, x = self.tov()
         max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, \
@@ -550,23 +550,26 @@ class GeneralRelativity:
         K0_guess = self.K0
         init_guess = [K0_guess]
 
-        res = minimize(self.optimize_x_R, x0=init_guess, method='Nelder-Mead',
-                       options={"disp": True, "xatol": 1e-3, "fatol": 1e-3})
+        res = minimize(self.optimize_x_R, x0 = init_guess, method='Nelder-Mead',
+                       options = {"disp": True, "xatol":1e-3, "fatol":1e-3})
 
         K0 = res.x[0]
         X0_factor = (self.e_c + self.p_c) * np.exp(self.nu0 / 2)
         X0_term1 = 4 * np.pi / 3 * (self.e_c + 3 * self.p_c) * self.W0 * G / (c ** 4)
         X0_term2 = -(self.omega ** 2) / self.l * np.exp(-self.nu0) * self.W0 / (c ** 2)
         X0_term3 = K0 / 2
+        self.K0 = K0
         self.X0 = X0_factor * (X0_term1 + X0_term2 + X0_term3)
         self.H00 = K0
         self.H10 = (self.l * K0 + 8 * np.pi * (G / (c ** 4)) * (self.e_c + self.p_c) * self.W0) / (self.nl + 1)
         self.n_iter_max = 20000
+        self.K0_arr = np.array(self.K0_vals)
+        self.loss_arr = np.array(self.loss_vals)
         return None
 
     def plot_loss(self):
         plt.figure()
-        plt.scatter(self.K0, self.loss_arr)
+        plt.scatter(self.K0_arr, self.loss_arr)
         plt.title(f"K0 Minimized: {self.K0}")
         plt.show()
         return None
