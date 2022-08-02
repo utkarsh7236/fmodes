@@ -8,8 +8,10 @@ from scipy.interpolate import interp1d
 import pandas as pd
 from scipy.integrate import complex_ode
 from tqdm import tqdm
-from scipy.optimize import minimize
+from scipy.optimize import minimize, curve_fit
 import matplotlib.pyplot as plt
+from matplotlib import cm as cm
+import time
 
 
 class GeneralRelativity:
@@ -30,7 +32,9 @@ class GeneralRelativity:
         self.p_arr, self.m_R, self.r_R, self.f, self.res, self.omega_arr = None, None, None, None, None, None
         self.loss_arr, self.nu0, self.nl, self.X0, self.H00, self.H10 = None, None, None, None, None, None
         self.b0, self.K0, self.Q0, self.r, self.nu, self.h1, self.k = None, None, None, None, None, None, None
-        self.x, self.z0, self.z, self.dzdr, self.K0_arr = None, None, None, None, None
+        self.x, self.z0, self.z, self.dzdr, self.K0_arr, self.fguess = None, None, None, None, None, None
+        self.imag, self.main_index_k, self.fmode_arr, self.abs_loss_arr, self.loss_arr2 = None, None, None, None, None
+        self.f_arr, self.popt, self.fmode = None, None, None
         self.hw1, self.hw2, self.hw3 = [300, 100, 30]
         self.omega_vals, self.loss_vals, self.K0_vals = [], [], []
 
@@ -415,13 +419,17 @@ class GeneralRelativity:
         self.p0 = self.p_arr[k]  # Initial pressure
         self.e0 = self.EOS(self.p0)  # Initial energy density
 
+        self.main_index_k = k
+
         # Define central pressure and energy density.
         self.p_c = self.p0 - 2 * np.pi * (G / (c ** 4)) * self.r_i ** 2 * (self.p0 + self.e0) * \
                    (3 * self.p0 + self.e0) / 3
         self.e_c = self.EOS(self.p_c)
 
         self.m0 = self.e_c / (c ** 2) * 4 / 3 * np.pi * self.r_i ** 3  # Central mass density
-        self.omega = 2e3 * (2 * np.pi) + 0.1j # Initial fmode frquency times 2pi
+
+        self.imag = 0.1j
+        self.omega = 2e3 * (2 * np.pi) + self.imag  # Initial fmode frquency times 2pi
 
         self.l = 2  # Spherical oscillation modes
         self.nu0 = -1  # Initial metric condition
@@ -523,7 +531,7 @@ class GeneralRelativity:
         print(f"Star has mass {m_R / self.const.msun:.3f} Msun and radius {r_R / self.const.km2cm:.3f}km")
         print(f"Interior Surface: {interior:.8f}")
         print(f"Exterior Surface: {schild:.8f}")
-        print(f"v0: {self.nu0}")
+        print(f"nu0: {self.nu0}")
         print(f"Lamda: {self._lamda_metric(m_R, r_R)}")
         print(f"Boundary Term: {x_R}")
         return None
@@ -544,14 +552,14 @@ class GeneralRelativity:
         return loss
 
     def minimize_K0(self):
-        self.n_iter_max = 10000
+        self.n_iter_max = 5000
         G = self.const.G
         c = self.const.c
         K0_guess = self.K0
         init_guess = [K0_guess]
 
-        res = minimize(self.optimize_x_R, x0 = init_guess, method='Nelder-Mead',
-                       options = {"disp": True, "xatol":1e-3, "fatol":1e-3})
+        res = minimize(self.optimize_x_R, x0=init_guess, method='Nelder-Mead',
+                       options={"disp": False, "xatol": 1e-3, "fatol": 1e-3})
 
         K0 = res.x[0]
         X0_factor = (self.e_c + self.p_c) * np.exp(self.nu0 / 2)
@@ -569,8 +577,10 @@ class GeneralRelativity:
 
     def plot_loss(self):
         plt.figure()
-        plt.scatter(self.K0_arr, self.loss_arr)
+        plt.scatter(self.K0_arr, self.loss_arr, color = "dodgerblue", marker = "x")
         plt.title(f"K0 Minimized: {self.K0}")
+        plt.xlabel("K0")
+        plt.ylabel("Log Loss")
         plt.show()
         return None
 
@@ -628,89 +638,250 @@ class GeneralRelativity:
         plt.show()
         return None
 
-    # def zerilli_alt(self, r_star, u, omega):
-    #     z, dZdr_star = u
-    #     d2Zdr2_star = z * (self.V_z_alt(r_star, self.m_R, self.nl) - omega * np.conj(omega) / (self.const.c ** 2))
-    #     ret = [dZdr_star, d2Zdr2_star]
-    #     return ret
-    #
-    # def alphas(self, omega, m_R):
-    #     n = self.nl
-    #     G = self.const.G
-    #     c = self.const.c
-    #     alpha0 = 1 + 1j
-    #     alpha1 = -1j * (n + 1) * alpha0 * c / omega
-    #     alpha2 = alpha0 * (c ** 2) * (-n * (n + 1) + 1j * m_R * omega * (G / (c ** 3)) * (3 / 2 + 3 / n)) / (
-    #                 2 * omega ** 2)
-    #     return alpha0, alpha1, alpha2
-    #
-    # def V_z_alt(self, r, m_R, nl):
-    #     b = self._b(r, m_R)
-    #     n = self, nl
-    #     fac = (1 - 2 * b)
-    #     num = 2 * (n ** 2) * (n + 1) + 6 * (n ** 2) * b + 18 * n * (b ** 2) + 18 * (b ** 3)
-    #     dem = (r ** 2) * (n + 3 * b) ** 2
-    #     return fac * num / dem
-    #
-    # def r_star_func(self, r, m_R):
-    #     G = self.const.G
-    #     c = self.const.c
-    #     return r + 2 * (G / (c ** 2)) * m_R * np.log(abs((r * (c ** 2)) / (2 * G * m_R) - 1))
-    #
-    # def V_z(self, r, m_R):
-    #     nl = self.nl
-    #     G = self.const.G
-    #     c = self.const.c
-    #     G_c2 = G / (c ** 2)
-    #     num = (1 - 2 * G_c2 * m_R / r)
-    #     dem = (r ** 3) * ((nl * r + 3 * G_c2 * m_R) ** 2)
-    #     fac1 = 2 * nl ** 2 * (nl + 1) * (r ** 3)
-    #     fac2 = 6 * (G_c2 ** 1) * (nl ** 2) * m_R * (r ** 2)
-    #     fac3 = 18 * (G_c2 ** 2) * nl * (m_R ** 2) * r
-    #     fac4 = 18 * (G_c2 ** 3) * (m_R ** 3)
-    #     fac = fac1 + fac2 + fac3 + fac4
-    #     ret = fac * num / dem
-    #     return ret
-    #
-    # def zerilli(self, r_star, u, omega):
-    #     omega2 = pow(omega, 2)
-    #     z, dZdr_star = u
-    #     d2Zdr2_star = z * (self.V_z(r_star, self.m_R) - omega2 / (self.const.c ** 2))
-    #     ret = [dZdr_star, d2Zdr2_star]  # dZ/dr*, d2Z/dr*2
-    #     return ret
-    #
-    # def zrly(self, omega, r_star_vals, progress=True):
-    #     r = complex_ode(lambda r, VEC: self.zerilli(r, VEC, omega)).set_integrator('LSODA', atol=1.49012e-8,
-    #                                                                                rtol=1.49012e-8)
-    #     r.set_initial_value(self.z0, self.r_star_func(self.r_R, np.real(self.m_R)))
-    #     results = [self.z0]
-    #     r_list = [self.r_star_func(self.r_R, self.m_R)]
-    #     i = 0
-    #     if progress:
-    #         self.pbar = tqdm(total=len(r_star_vals))
-    #     while r.successful():
-    #         i += 1
-    #         if i >= len(r_star_vals):
-    #             break
-    #         if progress:
-    #             self.pbar.update(1)
-    #
-    #         integral = r.integrate(r_star_vals[i])
-    #         if not r.successful():
-    #             break
-    #         results.append(integral)
-    #         r_list.append(r_star_vals[i])
-    #     results = np.array(results, dtype=complex)
-    #     z, dzdr = results.T
-    #     r = np.array(r_list)
-    #     self.z, self.dzdr, self.r = z, dzdr, r
-    #     return z, dzdr, r
-    #
-    # def optimize_fmode(self):
-    #     pass
-    #
-    # def plot_loss_fmode(self):
-    #     pass
+    def zerilli_alt(self, r_star, u, omega):
+        z, dZdr_star = u
+        d2Zdr2_star = z * (self.V_z_alt(r_star, self.m_R, self.nl) - omega * np.conj(omega) / (self.const.c ** 2))
+        ret = [dZdr_star, d2Zdr2_star]
+        return ret
+
+    def alphas(self, omega, m_R):
+        n = self.nl
+        G = self.const.G
+        c = self.const.c
+        alpha0 = 1 + 1j
+        alpha1 = -1j * (n + 1) * alpha0 * c / omega
+        alpha2 = alpha0 * (c ** 2) * (-n * (n + 1) + 1j * m_R * omega * (G / (c ** 3)) * (3 / 2 + 3 / n)) / (
+                2 * omega ** 2)
+        return alpha0, alpha1, alpha2
+
+    def V_z_alt(self, r, m_R, nl):
+        b = self._b(r, m_R)
+        n = self, nl
+        fac = (1 - 2 * b)
+        num = 2 * (n ** 2) * (n + 1) + 6 * (n ** 2) * b + 18 * n * (b ** 2) + 18 * (b ** 3)
+        dem = (r ** 2) * (n + 3 * b) ** 2
+        return fac * num / dem
+
+    def r_star_func(self, r, m_R):
+        G = self.const.G
+        c = self.const.c
+        return r + 2 * (G / (c ** 2)) * m_R * np.log(abs((r * (c ** 2)) / (2 * G * m_R) - 1))
+
+    def V_z(self, r, m_R):
+        nl = self.nl
+        G = self.const.G
+        c = self.const.c
+        G_c2 = G / (c ** 2)
+        num = (1 - 2 * G_c2 * m_R / r)
+        dem = (r ** 3) * ((nl * r + 3 * G_c2 * m_R) ** 2)
+        fac1 = 2 * nl ** 2 * (nl + 1) * (r ** 3)
+        fac2 = 6 * (G_c2 ** 1) * (nl ** 2) * m_R * (r ** 2)
+        fac3 = 18 * (G_c2 ** 2) * nl * (m_R ** 2) * r
+        fac4 = 18 * (G_c2 ** 3) * (m_R ** 3)
+        fac = fac1 + fac2 + fac3 + fac4
+        ret = fac * num / dem
+        return ret
+
+    def zerilli(self, r_star, u, omega):
+        omega2 = pow(omega, 2)
+        z, dZdr_star = u
+        d2Zdr2_star = z * (self.V_z(r_star, self.m_R) - omega2 / (self.const.c ** 2))
+        ret = [dZdr_star, d2Zdr2_star]  # dZ/dr*, d2Z/dr*2
+        return ret
+
+    def zrly(self, omega, r_star_vals, progress=True):
+        r = complex_ode(lambda r, VEC: self.zerilli(r, VEC, omega)).set_integrator('LSODA', atol=1.49012e-8,
+                                                                                   rtol=1.49012e-8)
+        r.set_initial_value(self.z0, self.r_star_func(self.r_R, np.real(self.m_R)))
+        results = [self.z0]
+        r_list = [self.r_star_func(self.r_R, self.m_R)]
+        i = 0
+        if progress:
+            self.pbar = tqdm(total=len(r_star_vals))
+        while r.successful():
+            i += 1
+            if i >= len(r_star_vals):
+                break
+            if progress:
+                self.pbar.update(1)
+
+            integral = r.integrate(r_star_vals[i])
+            if not r.successful():
+                break
+            results.append(integral)
+            r_list.append(r_star_vals[i])
+        results = np.array(results, dtype=complex)
+        z, dzdr = results.T
+        r = np.array(r_list)
+        self.z, self.dzdr, self.r = z, dzdr, r
+        return z, dzdr, r
+
+    @staticmethod
+    def quadratic(x, a, b, c):
+        return a * (x ** 2) + b * x + c
+
+    def optimize_fmode(self, hw=None, progress=True):
+        c = self.const.c
+        G = self.const.G
+
+        imag = self.imag
+
+        if hw is None:
+            fmin = 2.8e3
+            fmax = 1.3e3
+
+        else:
+            fmin = self.fguess - hw
+            fmax = self.fguess + hw
+
+        if progress:
+            for_loop = tqdm(np.linspace(fmin * 2 * np.pi + imag, fmax * 2 * np.pi + imag, 10))
+        else:
+            for_loop = np.linspace(fmin * 2 * np.pi + imag, fmax * 2 * np.pi + imag, 10)
+
+        omega_vals = []
+        loss_vals = []
+        abs_loss_vals = []
+
+        for omega in for_loop:
+            self.initial_conditions(k=self.main_index_k)
+            self.omega = omega
+            self.tov()
+            self.update_initial_conditions()
+            time.sleep(0.1)
+            self.tov()
+            self.update_initial_conditions()
+            time.sleep(0.1)
+            self.tov()
+            self._save_mass_radius()
+
+            max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, interior = \
+                self._surface_conditions(self.p, self.m, self.r_arr, self.nu, self.h1, self.k, self.w, self.x)
+
+            if r_R < 3 * self.const.km2cm:
+                print(f"[ERROR] Radius is only {r_R / self.const.km2cm}km. Skipping...")
+                continue
+
+            self.minimize_K0()
+            self.init_VEC = [self.p_c, self.m0, self.nu0, self.H10, self.K0, self.W0, self.X0]
+            time.sleep(0.2)
+            self.tov()
+
+            max_idx, m_R, r_R, p_R, ec_R, nu_R, h1_R, k_R, w_R, x_R, schild, interior = \
+                self._surface_conditions(self.p, self.m, self.r_arr, self.nu, self.h1, self.k, self.w, self.x)
+
+            h1r = h1_R
+            Kr = k_R
+            b = self._b(r_R, m_R)
+            n = self.nl
+            r = r_R
+            z_R = r * (Kr / (1 - 2 * b) - h1r) / (-(-3 * b ** 2 - 3 * b * n + n) / ((1 - 2 * b) * (3 * b + n)) + (
+                    6 * b ** 2 + 3 * b * n + n * (n + 1)) / ((1 - 2 * b) * (3 * b + n)))
+            dzdR_R = (-Kr * (-3 * b ** 2 - 3 * b * n + n) / ((1 - 2 * b) * (3 * b + n)) + h1r * (
+                    6 * b ** 2 + 3 * b * n + n * (n + 1)) / (3 * b + n)) / (
+                             -(-3 * b ** 2 - 3 * b * n + n) / ((1 - 2 * b) * (3 * b + n)) + (
+                             6 * b ** 2 + 3 * b * n + n * (n + 1)) / ((1 - 2 * b) * (3 * b + n)))
+
+            self.z0 = [z_R, dzdR_R]
+            alpha0, alpha1, alpha2 = self.alphas(omega, m_R)
+
+            # From surface to inf
+            r_vals = np.linspace(r_R, 25 * c / np.real(omega), 500)
+            r_star_vals = self.r_star_func(r_vals, np.real(m_R))
+            z, dzdr_star, r_int = self.zrly(omega, r_star_vals, progress=False)
+
+            # Save final values
+            zFinal = z[-1]
+            zPrimeFinal = dzdr_star[-1]
+            rFinal = r_vals[-1]
+            rStarFinal = r_star_vals[-1]
+
+            b = self._b(rFinal, m_R)
+
+            # Z+/-
+            zMinus = np.exp(-1j * (omega / c) * rStarFinal) * (alpha0 + alpha1 / rFinal + alpha2 / (rFinal ** 2))
+            zPlus = np.conjugate(zMinus)
+
+            # Zprime +/-
+            zPrimeMinus = -1j * (omega / c) * np.exp(-1j * (omega / c) * rStarFinal) \
+                          * (alpha0 + alpha1 / rFinal + (alpha2 + 1j * alpha1 * (1 - 2 * b) * c / omega) / (
+                    rFinal ** 2))
+            zPrimePlus = np.conjugate(zPrimeMinus)
+
+            # A+
+            A_plus = -zFinal * zPrimeMinus / (zMinus * zPrimePlus - zPlus * zPrimeMinus) \
+                     + zMinus * zPrimeFinal / (zMinus * zPrimePlus - zPlus * zPrimeMinus)
+
+            # A-
+            A_minus = -zFinal * zPrimePlus / (-zMinus * zPrimePlus + zPlus * zPrimeMinus) \
+                      + zPlus * zPrimeFinal / (-zMinus * zPrimePlus + zPlus * zPrimeMinus)
+
+            loss = A_plus
+            abs_loss = abs(loss)
+
+            if abs_loss > 1e3:
+                continue
+
+            omega_vals.append(omega)
+            loss_vals.append(loss)
+            abs_loss_vals.append(abs_loss)
+
+        omega_arr = np.array(omega_vals)
+        loss_arr = np.array(loss_vals)
+        abs_loss_arr = np.array(abs_loss_vals)
+        fmode_arr = np.real(omega_arr / (2 * np.pi))
+
+        vec = np.real(loss_arr)
+        popt, pcov = curve_fit(self.quadratic, xdata=np.real(fmode_arr), ydata=vec)
+        f_arr = np.linspace(fmin * 2 * np.pi + imag, fmax * 2 * np.pi + imag, 500) / (2 * np.pi)
+        fmode = np.real(f_arr[np.argmin(np.abs(self.quadratic(np.real(f_arr), *popt)))])
+
+        _math_a, _math_b, _math_c = popt
+        det = np.sqrt(_math_b ** 2 - 4 * _math_a * _math_c)
+        fmode1 = (-_math_b + det) / (2 * _math_a)
+        fmode2 = (-_math_b - det) / (2 * _math_a)
+        if abs(fmode1 - fmode2) < 250:
+            fmode = (fmode1 + fmode2) / 2
+
+        self.fguess = fmode
+        self.omega_arr = omega_arr
+        self.fmode_arr = fmode_arr
+        self.abs_loss_arr = abs_loss_arr
+        self.loss_arr2 = loss_arr
+        self.f_arr = f_arr
+        self.popt = popt
+        self.fmode = fmode
+
+    def solve_exterior(self, progress=True):
+        self.optimize_fmode(hw=None, progress = progress)
+        self.optimize_fmode(hw=self.hw1, progress = progress)
+        self.optimize_fmode(hw=self.hw2, progress = progress)
+        self.optimize_fmode(hw=self.hw3, progress = progress)
+        return None
+
+    def plot_loss_fmode(self):
+        plt.figure(dpi=100)
+        sc = plt.scatter(np.real(self.loss_arr2), np.imag(self.loss_arr2), c=self.fmode_arr, cmap=cm.rainbow)
+        plt.xlabel("Re[A+]")
+        plt.ylabel("Im[A+]")
+        plt.colorbar(sc, label="fmode")
+        plt.tight_layout()
+        plt.axhline(0)
+        plt.axvline(0)
+        lim = 20 * min(np.abs(self.loss_arr2))
+        plt.xlim(-lim, lim)
+        plt.ylim(-lim, lim)
+        plt.show()
+
+        plt.figure(dpi=100)
+        plt.plot(np.real(self.fmode_arr), np.real(self.loss_arr2), label="simulation")
+        plt.plot(np.real(self.f_arr), self.quadratic(np.real(self.f_arr), *self.popt), label="fit")
+        plt.axvline(self.fmode, label="fmode", color="red")
+        plt.title(f"fmode:{self.fmode}")
+        plt.xlabel("fmode")
+        plt.ylabel("loss")
+        plt.legend()
+        plt.show()
 
 
 if __name__ == "__main__":
