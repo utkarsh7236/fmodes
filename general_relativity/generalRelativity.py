@@ -191,6 +191,19 @@ class GeneralRelativity:
         """
         return (2 / r) * np.exp(lamda) * Q
 
+    @staticmethod
+    def get_omega_bounds(mass_arr, radius_arr):
+        """
+        Set bounds on oscillation frequency in the newtonian limit. Values based on lower and upper limit of
+        arXiv 1501.02970.
+        :param mass_arr: Value of enclosed mass at star surface.
+        :param radius_arr: Value of radius at star surface.
+        :return: Lower and upper bound of what oscillation modes should be.
+        """
+        lower = 2 * np.pi * (0.60e3 + 23e-6 * np.sqrt(mass_arr / (radius_arr ** 3)))
+        upper = 2 * np.pi * (0.8e3 + 50e-6 * np.sqrt(mass_arr / (radius_arr ** 3)))
+        return lower, upper
+
     def _H0(self, r, nu, X, nl, Q, omega, lamda, H1, b, K):
         """
         :param r: Radius at given point.
@@ -852,7 +865,7 @@ class GeneralRelativity:
         self.popt = popt
         self.fmode = fmode
 
-    def solve_exterior(self, progress=True):
+    def solve_exterior(self, progress=False):
         self.optimize_fmode(hw=None, progress = progress)
         self.optimize_fmode(hw=self.hw1, progress = progress)
         self.optimize_fmode(hw=self.hw2, progress = progress)
