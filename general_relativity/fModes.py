@@ -18,7 +18,7 @@ class fmodes(GeneralRelativity):
 
     def __init__(self):
         """
-        Initialize, call parent class in Cowling approximation.
+        Initialize, call parent class using General Relativity.
         """
         super(fmodes, self).__init__()
         self.GR = GeneralRelativity()
@@ -40,15 +40,15 @@ class fmodes(GeneralRelativity):
 
     def set_EOS(self, path):
         """
-        Use parent Cowling class to read EOS, define integration values and limits.
+        Use parent GR class to read EOS, define integration values and limits.
         :param path: Path to EOS table.
         :return: None
         """
-        self.path = path
-        self.GR.read_data(self.path)
-        self.e_arr, self.p_arr = self.GR.e_arr, self.GR.p_arr
+        self.path = path # Set path to EOS table
+        self.GR.read_data(self.path) # Apply helper function to read data
+        self.e_arr, self.p_arr = self.GR.e_arr, self.GR.p_arr # Set internal veriables
         self.EOS_name = re.search("([^\/]+$)", self.path).group(0)  # Regex search limiting pressure table bounds
-        self._get_vals()
+        self._get_vals() # Set limits for start/stop points of integration along the table.
         return None
 
     def _get_vals(self):
@@ -61,7 +61,7 @@ class fmodes(GeneralRelativity):
             self.ind_start, self.ind_stop, self.jump = self.dic[self.EOS_name]
             self.vals = range(self.ind_stop, self.ind_start + 1, 1)[::-self.jump]
         elif self.EOS_name[:4] == "eos_":
-            self.ind_start, self.ind_stop, self.jump = -2, -300, 50 # CHANGE THE 50 BACK TO 3
+            self.ind_start, self.ind_stop, self.jump = -2, -300, 3
             self.vals = range(self.ind_stop, self.ind_start + 1, 1)[::-self.jump]
         else:
             self.ind_start, self.ind_stop = -2, -len(self.p_arr)
@@ -70,18 +70,25 @@ class fmodes(GeneralRelativity):
 
     def process(self, k):
         """
-        Define wrapper function to integrate. Define new Cowling Approximation class to prevent parallel memory issues.
+        Define wrapper function to integrate. Define new GR class to prevent parallel memory issues.
         :param k: Index of integration dependent on _get_vals()
         :return: oscillation mode, mass at surface, radius at surface, index.
         """
+        # Initialize
         curr = GeneralRelativity()
         curr.read_data(self.path)
+
+        # Load initial conditions
         curr.initial_conditions(k=k)
         curr.tov()
+
+        # Update initial conditions (nu step)
         curr.update_initial_conditions()
         curr.tov()
         curr.update_initial_conditions()
         curr.tov()
+
+        # Solve for exterior fundamental mode
         curr.solve_exterior()
         return np.real(curr.fmode), np.real(curr.m_R), np.real(curr.r_R), np.real(k)
 
@@ -115,10 +122,13 @@ class fmodes(GeneralRelativity):
         Display results of integration in understandable units.
         :return: None
         """
+        # Maximum mass case
         print(f"M_max = {self.mass_arr[self.max_idx_new] / self.const.msun}")
         print(f"R_max = {self.radius_arr[self.max_idx_new] / self.const.km2cm}")
         print(f"f_max = {self.f_mode_arr[self.max_idx_new]}")
         print()
+
+        # Solar mass case
         solar_idx = (np.abs(self.mass_arr / self.const.msun - 1.4)).argmin()  # Solar index
         print(f"M_1.4 = {self.mass_arr[solar_idx] / self.const.msun}")
         print(f"R_1.4 = {self.radius_arr[solar_idx] / self.const.km2cm}")
